@@ -3,11 +3,13 @@
 {-# OPTIONS -fno-warn-orphans #-}
 module Data.Shaped.Pixels where
 
+import Control.Applicative
 import Codec.Picture.Types
 import Vision.Image.Type
 import Vision.Primitive.Shape (Z (..), (:.) (..))
-import Data.Shaped.Base
+-- import Data.Shaped.Base
 import Data.Shaped
+import Data.Shaped.Base
 import Foreign
 import Data.Vector.Storable (unsafeCast)
 import Control.Lens
