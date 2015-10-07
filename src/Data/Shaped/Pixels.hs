@@ -8,7 +8,7 @@ import Codec.Picture.Types
 import Vision.Image.Type
 import Vision.Primitive.Shape (Z (..), (:.) (..))
 -- import Data.Shaped.Base
-import Data.Shaped
+import Data.Shaped.Generic
 import Data.Shaped.Base
 import Foreign
 import Data.Vector.Storable (unsafeCast)
@@ -54,7 +54,7 @@ juicyPacked = iso (\(Image w h v)      -> Array (V2 w h) (unsafeCast v))
 {-# INLINE juicyPacked #-}
 
 testImage :: (Pixel a, Storable a) => Image a -> [V2 Int]
-testImage image = filter (\v@(V2 x y) -> pixelAt image x y /= img ^?! ix v) (l ^.. enumShape)
+testImage image = filter (\v@(V2 x y) -> pixelAt image x y /= img ^?! ix v) (l ^.. indexes)
   where
    img@(Array l _) = image ^. juicy
 
