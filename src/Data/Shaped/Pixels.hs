@@ -1,19 +1,29 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE FlexibleContexts #-}
-{-# OPTIONS -fno-warn-orphans #-}
-module Data.Shaped.Pixels where
+{-# OPTIONS -fno-warn-orphans #-} -- juicy storable instances
+
+module Data.Shaped.Pixels
+  ( -- * JuicyPixels
+    juicy
+  , juicyFlipped
+  , juicyBase
+  , juicyPacked
+
+    -- * friday
+  , fried
+  )where
 
 import Control.Applicative
 import Codec.Picture.Types
-import Vision.Image.Type
+import qualified Vision.Image.Type as F
 import Vision.Primitive.Shape (Z (..), (:.) (..))
--- import Data.Shaped.Base
 import Data.Shaped.Generic
 import Data.Shaped.Base
 import Foreign
 import Data.Vector.Storable (unsafeCast)
 import Control.Lens
 import Linear
+import Prelude
 
 -- | Images use storable vectors. The 'zero' pixel corresponds to the
 --   top left pixel.
@@ -23,22 +33,37 @@ type Img = SArray V2
 -- JuicyPixels
 ------------------------------------------------------------------------
 
--- XXX Sort out row-minor and row-major forms
-
--- | Isomorphism between a "JuicyPixels" 'Image' and a "shaped" 'Array'.
+-- | Isomorphism between a "JuicyPixels" 'Image' and a "shaped"
+--   'Delayed'. Note the image is transposed internally to because 'Image'
+--   is column-major and 'V2' is row-major.
 juicy :: (Storable a, Storable (PixelBaseComponent a),
           Storable b, Storable (PixelBaseComponent b) )
-      => Iso (Image a) (Image b) (Img a) (Img b)
-juicy = iso (\(Image w h v)      -> Array (V2 w h) (unsafeCast v))
-            (\(Array (V2 w h) v) -> Image w h (unsafeCast v))
+      => Iso (Image a) (Image b) (Delayed V2 a) (Delayed V2 b)
+juicy = juicyFlipped . delayed . transposed
 {-# INLINE juicy #-}
+
+transposed :: Iso (Delayed V2 a) (Delayed V2 b) (Delayed V2 a) (Delayed V2 b)
+transposed = iso trans trans
+  where trans (Delayed l ixF) = Delayed (view _yx l) $ ixF . toIndex l . view _yx . fromIndex l
+{-# INLINE transposed #-}
+
+-- | O(1) isomorphism between a "JuicyPixels" 'Image' and a "shaped" 'Array'.
+--
+--   Note that "shaped" uses row-major indexing and "JuicyPixels" uses
+--   column-major, so O(1) conversion means the image gets flipped.
+juicyFlipped :: (Storable a, Storable (PixelBaseComponent a),
+                 Storable b, Storable (PixelBaseComponent b) )
+      => Iso (Image a) (Image b) (Img a) (Img b)
+juicyFlipped = iso (\(Image w h v)      -> Array (V2 h w) (unsafeCast v))
+                   (\(Array (V2 h w) v) -> Image w h (unsafeCast v))
+{-# INLINE juicyFlipped #-}
 
 -- | Isomorphism between a "JuicyPixels" 'Image' and a "shaped" 'Array'
 --   with the 'Pixel''s base component.
 juicyBase :: forall a b. (Pixel a, Pixel b)
           => Iso (Image a) (Image b) (Img (PixelBaseComponent a)) (Img (PixelBaseComponent b))
-juicyBase = iso (\(Image w h v)      -> Array (n *^ V2 w h) v)
-                (\(Array (V2 w h) v) -> Image (w `div` n) (h `quot` n) v)
+juicyBase = iso (\(Image w h v)      -> Array (n *^ V2 h w) v)
+                (\(Array (V2 h w) v) -> Image (w `quot` n) (h `quot` n) v)
   where n = componentCount (undefined :: a)
 {-# INLINE juicyBase #-}
 
@@ -52,11 +77,6 @@ juicyPacked :: (Storable a, Storable (PixelBaseComponent a),
 juicyPacked = iso (\(Image w h v)      -> Array (V2 w h) (unsafeCast v))
                   (\(Array (V2 w h) v) -> Image w h (unsafeCast v))
 {-# INLINE juicyPacked #-}
-
-testImage :: (Pixel a, Storable a) => Image a -> [V2 Int]
-testImage image = filter (\v@(V2 x y) -> pixelAt image x y /= img ^?! ix v) (l ^.. indexes)
-  where
-   img@(Array l _) = image ^. juicy
 
 instance Storable PixelRGBA8 where
   sizeOf ~(PixelRGBA8 a _ _ _) = 4 * sizeOf a
@@ -189,9 +209,9 @@ instance Storable PixelRGB8 where
 ------------------------------------------------------------------------
 
 -- | Isomorphism between a "JuicyPixels" 'Image' and a "shaped" 'Array'.
-fried :: Iso (Manifest a) (Manifest b) (Img a) (Img b)
-fried = iso (\(Manifest (Z :. w :. h) v) -> Array (V2 w h) v)
-            (\(Array (V2 w h) v)         -> Manifest (Z :. w :. h) v)
+fried :: Iso (F.Manifest a) (F.Manifest b) (Img a) (Img b)
+fried = iso (\(F.Manifest (Z :. w :. h) v) -> Array (V2 w h) v)
+            (\(Array (V2 w h) v)           -> F.Manifest (Z :. w :. h) v)
 {-# INLINE fried #-}
 
 -- juicyFri :: Iso (Image (Juicy a)) (Image (Juicy b)) (Manifest a) (Manifest b)
