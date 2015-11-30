@@ -1,4 +1,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+-- {-# LANGUAGE CPP #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# OPTIONS -fno-warn-orphans #-} -- juicy storable instances
 
@@ -13,12 +16,21 @@ module Data.Shaped.Pixels
   , fried
   )where
 
+import qualified Data.Vector.Generic as G
+import qualified Data.Vector.Generic.Mutable as M
+import qualified Data.Vector.Unboxed as U
+-- import qualified Data.Vector.Unboxed.Mutable as UM
+import qualified Data.Vector.Primitive as P
+
+import Control.Monad
 import Control.Applicative
 import Codec.Picture.Types
 import qualified Vision.Image.Type as F
 import Vision.Primitive.Shape (Z (..), (:.) (..))
 import Data.Shaped.Generic
 import Data.Shaped.Base
+-- import Data.Shaped.Delayed.Generic
+-- import Data.Shaped.Delayed
 import Foreign
 import Data.Vector.Storable (unsafeCast)
 import Control.Lens
@@ -44,8 +56,15 @@ juicy = juicyFlipped . delayed . transposed
 
 transposed :: Iso (Delayed V2 a) (Delayed V2 b) (Delayed V2 a) (Delayed V2 b)
 transposed = iso trans trans
-  where trans (Delayed l ixF) = Delayed (view _yx l) $ ixF . toIndex l . view _yx . fromIndex l
+  where trans (Delayed l ixF) = Delayed (view _yx l) (ixF . view _yx)
 {-# INLINE transposed #-}
+
+-- transposed :: Iso (Delayed V2 a) (Delayed V2 b) (Delayed V2 a) (Delayed V2 b)
+-- transposed = iso trans trans
+--   -- where trans (Delayed l ixF) = Delayed (view _yx l) $ ixF . view _yx
+--   where trans (Delayed l ixF)
+--           = Delayed (view _yx l) $ ixF . shapeToIndex l . view _yx . shapeFromIndex l
+-- {-# INLINE transposed #-}
 
 -- | O(1) isomorphism between a "JuicyPixels" 'Image' and a "shaped" 'Array'.
 --
@@ -62,8 +81,8 @@ juicyFlipped = iso (\(Image w h v)      -> Array (V2 h w) (unsafeCast v))
 --   with the 'Pixel''s base component.
 juicyBase :: forall a b. (Pixel a, Pixel b)
           => Iso (Image a) (Image b) (Img (PixelBaseComponent a)) (Img (PixelBaseComponent b))
-juicyBase = iso (\(Image w h v)      -> Array (n *^ V2 h w) v)
-                (\(Array (V2 h w) v) -> Image (w `quot` n) (h `quot` n) v)
+juicyBase = iso (\(Image w h v)      -> Array (V2 h (n*w)) v)
+                (\(Array (V2 h w) v) -> Image (w `quot` n) h v)
   where n = componentCount (undefined :: a)
 {-# INLINE juicyBase #-}
 
@@ -77,6 +96,54 @@ juicyPacked :: (Storable a, Storable (PixelBaseComponent a),
 juicyPacked = iso (\(Image w h v)      -> Array (V2 w h) (unsafeCast v))
                   (\(Array (V2 w h) v) -> Image w h (unsafeCast v))
 {-# INLINE juicyPacked #-}
+
+newtype instance U.Vector    PixelRGB8 = V_RGB (P.Vector    Word8)
+newtype instance U.MVector s PixelRGB8 = M_RGB (P.MVector s Word8)
+instance U.Unbox PixelRGB8
+
+instance M.MVector U.MVector PixelRGB8 where
+  {-# INLINE basicLength #-}
+  {-# INLINE basicUnsafeSlice #-}
+  {-# INLINE basicOverlaps #-}
+  {-# INLINE basicUnsafeNew #-}
+  {-# INLINE basicUnsafeRead #-}
+  {-# INLINE basicUnsafeWrite #-}
+  basicLength (M_RGB v)              = M.length v `div` 3
+  basicUnsafeSlice m n (M_RGB v)     = M_RGB (M.basicUnsafeSlice (3*m) (3*n) v)
+  basicOverlaps (M_RGB v) (M_RGB u) = M.basicOverlaps v u
+  basicUnsafeNew n                  = liftM M_RGB (M.basicUnsafeNew (3*n))
+  basicUnsafeRead (M_RGB v) i        =
+    do let o = 3*i
+       x <- M.basicUnsafeRead v o
+       y <- M.basicUnsafeRead v (o+1)
+       z <- M.basicUnsafeRead v (o+2)
+       return (PixelRGB8 x y z)
+  basicUnsafeWrite (M_RGB v) i (PixelRGB8 x y z) =
+    do let o = 3*i
+       M.basicUnsafeWrite v o     x
+       M.basicUnsafeWrite v (o+1) y
+       M.basicUnsafeWrite v (o+2) z
+-- #if MIN_VERSION_vector(0,11,0)
+  basicInitialize (M_RGB v) = M.basicInitialize v
+  {-# INLINE basicInitialize #-}
+-- #endif
+
+instance G.Vector U.Vector PixelRGB8 where
+  {-# INLINE basicUnsafeFreeze #-}
+  {-# INLINE basicUnsafeThaw   #-}
+  {-# INLINE basicLength       #-}
+  {-# INLINE basicUnsafeSlice  #-}
+  {-# INLINE basicUnsafeIndexM #-}
+  basicUnsafeFreeze (M_RGB v)     = liftM  V_RGB (G.basicUnsafeFreeze v)
+  basicUnsafeThaw   ( V_RGB v)     = liftM M_RGB (G.basicUnsafeThaw   v)
+  basicLength       ( V_RGB v)     = G.basicLength v `div` 3
+  basicUnsafeSlice m n (V_RGB v) = V_RGB (G.basicUnsafeSlice (3*m) (3*n) v)
+  basicUnsafeIndexM (V_RGB v) i    =
+    do let o = 3*i
+       x <- G.basicUnsafeIndexM v o
+       y <- G.basicUnsafeIndexM v (o+1)
+       z <- G.basicUnsafeIndexM v (o+2)
+       return (PixelRGB8 x y z)
 
 instance Storable PixelRGBA8 where
   sizeOf ~(PixelRGBA8 a _ _ _) = 4 * sizeOf a

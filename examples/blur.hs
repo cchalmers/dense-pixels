@@ -1,11 +1,14 @@
 {-# LANGUAGE MultiWayIf #-}
 {-# LANGUAGE FlexibleContexts #-}
-import Data.Shaped
-import Data.Shaped.Base
+import Data.Shaped hiding (Focused (..), Delayed (..))
+-- import Data.Shaped.Base
 import Data.Shaped.Pixels
 import Control.Lens
 
-import qualified Data.Shaped.Unboxed as U
+-- import qualified Data.Shaped.Delayed.Generic as U
+-- import Data.Shaped.Delayed
+import qualified Data.Shaped.Generic as U
+import Data.Shaped.Base
 
 import Codec.Picture
 import Data.Word
@@ -17,27 +20,43 @@ import System.Environment
 import System.FilePath.Lens
 
 juicyRGB :: Iso' (Image PixelRGB8) (V3 (Delayed V2 Word8))
-juicyRGB = juicyBase . delayed . splitRGB8
+juicyRGB = juicyBase . U.delayed . splitRGB8
 
 -- Not particularly efficient.
 splitRGB8 :: Iso' (Delayed V2 Word8) (V3 (Delayed V2 Word8))
 splitRGB8 = iso spl unspl where
 
   spl (Delayed l ixF) =
-    V3 (Delayed l' (ixF . (*3)))
-       (Delayed l' (ixF . (+1) . (*3)))
-       (Delayed l' (ixF . (+2) . (*3)))
-         where l' = fmap (`quot` 3) l
+    V3 (Delayed l' (ixF . over _y (*3)))
+       (Delayed l' (ixF . over _y ((+1) . (*3))))
+       (Delayed l' (ixF . over _y ((+2) . (*3))))
+         where l' = over _y (`quot` 3) l
 
   unspl
-    (V3 (Delayed l (ixF0))
-        (Delayed _ (ixF1))
-        (Delayed _ (ixF2)))
-      = Delayed (fmap (*3) l) $ \i ->
-          case i `quotRem` 3 of
-            (a, 0) -> ixF0 a
-            (a, 1) -> ixF1 a
-            (a, _) -> ixF2 a
+    (V3 (Delayed l ixF0)
+        (Delayed _ ixF1)
+        (Delayed _ ixF2))
+      = Delayed (over _y (*3) l) $ \(V2 i j) ->
+          case j `quotRem` 3 of
+            (a, 0) -> ixF0 (V2 i a)
+            (a, 1) -> ixF1 (V2 i a)
+            (a, _) -> ixF2 (V2 i a)
+
+  -- spl (Delayed l ixF) =
+  --   V3 (Delayed l' (ixF . (*3)))
+  --      (Delayed l' (ixF . (+1) . (*3)))
+  --      (Delayed l' (ixF . (+2) . (*3)))
+  --        where l' = over _y (`quot` 3) l
+
+  -- unspl
+  --   (V3 (Delayed l (ixF0))
+  --       (Delayed _ (ixF1))
+  --       (Delayed _ (ixF2)))
+  --     = Delayed (over _y (*3) l) $ \i ->
+  --         case i `quotRem` 3 of
+  --           (a, 0) -> ixF0 a
+  --           (a, 1) -> ixF1 a
+  --           (a, _) -> ixF2 a
 
 ------------------------------------------------------------------------
 
@@ -63,8 +82,8 @@ periodic = BoundaryIndex $ \l ixF x ->
 -- | Any values not 'inRange' take a constant value.
 constant :: Shape f => a -> BoundaryIndex f a
 constant a = BoundaryIndex $ \l ixF x ->
-  if | inRange l x -> ixF x
-     | otherwise   -> a
+  if | U.shapeInRange l x -> ixF x
+     | otherwise          -> a
 {-# INLINE constant #-}
 
 -- | Any values not in range are clamped.
@@ -106,7 +125,7 @@ mkIndexesWithCentre dx a = G.fromList $ a ^@.. reindexed (^-^ dx) values
 
 -- Blur ----------------------------------------------------------------
 
-blurStencil :: (U.Unbox a, Num a) => UArray V2 a
+blurStencil :: (UV.Unbox a, Num a) => UArray V2 a
 blurStencil = U.fromListInto_ (V2 5 5)
   [ 2,  4,  5,  4,  2
   , 4,  9, 12,  9,  4
@@ -123,12 +142,15 @@ wordExtract :: Focused V2 Word -> Word
 wordExtract = sumNeighbours clamped blurWords
 
 blurWord8 :: Delayed V2 Word8 -> Delayed V2 Word8
-blurWord8 = extendFocus (fromIntegral . (`quot` 159) . wordExtract)
+blurWord8 = U.extendFocus (fromIntegral . (`quot` 159) . wordExtract)
           . fmap fromIntegral
 {-# INLINE blurWord8 #-}
 
 blurImage :: Image PixelRGB8 -> Image PixelRGB8
-blurImage = over (juicyRGB . _x . from U.delayed) ((!! 5) . iterate (manifest . blurWord8 . delay))
+blurImage = over (juicyRGB . each . from udelayed) ((!! 4) . iterate (U.manifest . blurWord8 . U.delay))
+
+udelayed :: (UV.Unbox a, Shape l) => Iso' (UArray l a) (Delayed l a)
+udelayed = U.delayed
 
 -- Read a png file from the first argument and make a blured file
 -- (file_blured.png). JuicyPixels conversion is kinda messy, mainly
@@ -137,5 +159,5 @@ main :: IO ()
 main = do
   [path] <- getArgs
   Right (ImageRGB8 img) <- readPng path
-  writePng (path & basename <>~ "_blured") (blurImage img)
+  writePng (path & basename <>~ "_blured1") (blurImage img)
 
